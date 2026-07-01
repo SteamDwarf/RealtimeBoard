@@ -11,4 +11,11 @@ export class BoardObjectsService {
             data: { ...dto },
         });
     }
+
+    async findAllByRoomId(roomId: string) {
+        return await this.prisma.boardObject.findMany({
+            where: { roomId },
+            orderBy: { createdAt: 'asc' },
+        });
+    }
 }

@@ -10,7 +10,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { JoinRoomDTO, joinRoomSchema } from './dto/join-room.dto';
-import { Logger, UseFilters, UsePipes } from '@nestjs/common';
+import { Inject, Logger, UseFilters, UsePipes } from '@nestjs/common';
 import { BoardObjectsService } from '../board-objects/board-objects.service';
 import { ZodWsValidationPipe } from 'src/common/pipes/zod-ws.validation.pipe';
 import {
@@ -19,6 +19,15 @@ import {
 } from '../board-objects/dto/create-board-object.dto';
 import { error } from 'console';
 import { WsExceptionFilter } from 'src/common/filters/ws-exception.filter';
+import {
+    GetBoardObjectsDTO,
+    getBoardObjectsSchema,
+} from '../board-objects/dto/get-board-objects.dto';
+import { RedisClientType } from 'redis';
+import {
+    MoveBoardObjectDTO,
+    moveBoardObjectSchema,
+} from '../board-objects/dto/move-board-object.dto';
 
 @UseFilters(new WsExceptionFilter())
 @WebSocketGateway({
@@ -34,7 +43,11 @@ export class BoardGatewayGateway
 
     private readonly logger = new Logger(BoardGatewayGateway.name);
 
-    constructor(private readonly boardObjectsService: BoardObjectsService) {}
+    constructor(
+        private readonly boardObjectsService: BoardObjectsService,
+        @Inject('REDIS_DATA_CLIENT')
+        private readonly redisClient: RedisClientType,
+    ) {}
 
     handleConnection(client: Socket) {
         this.logger.log(`🔌 Клиент подключился: ${client.id}`);
@@ -76,5 +89,70 @@ export class BoardGatewayGateway
         this.server.to(dto.roomId).emit('object:created', newObject);
 
         return { status: 'ok', data: newObject };
+    }
+
+    @SubscribeMessage('objects:get')
+    async getBoardObjects(
+        @ConnectedSocket() client: Socket,
+        @MessageBody(new ZodWsValidationPipe(getBoardObjectsSchema))
+        dto: GetBoardObjectsDTO,
+    ) {
+        const { roomId } = dto;
+
+        try {
+            const dbObjects =
+                await this.boardObjectsService.findAllByRoomId(roomId);
+            const redisKey = `room:objects:${roomId}`;
+            const cachedCoords = await this.redisClient.hGetAll(redisKey);
+
+            const objects = dbObjects.map((obj) => {
+                if (cachedCoords && cachedCoords[obj.id]) {
+                    const { x, y } = JSON.parse(cachedCoords[obj.id]);
+
+                    return { ...obj, x, y };
+                }
+
+                return obj;
+            });
+
+            this.logger.log(
+                `📦 Клиент ${client.id} запросил объекты для комнаты ${roomId}. Найдено: ${objects.length}`,
+            );
+
+            return {
+                status: 'ok',
+                data: objects,
+            };
+        } catch (error) {
+            this.logger.error(
+                `Ошибка при получении объектов для комнаты ${roomId}`,
+                error,
+            );
+            throw new WsException({
+                status: 'error',
+                message: 'Не удалось загрузить объекты доски',
+            });
+        }
+    }
+
+    @SubscribeMessage('object:move')
+    async moveBoardObject(
+        @ConnectedSocket() client: Socket,
+        @MessageBody(new ZodWsValidationPipe(moveBoardObjectSchema))
+        dto: MoveBoardObjectDTO,
+    ) {
+        const { id, roomId, x, y } = dto;
+        const redisKey = `room:objects:${roomId}`;
+
+        await this.redisClient.hSet(redisKey, id, JSON.stringify({ x, y }));
+        await this.redisClient.sAdd('board:dirty_rooms', roomId);
+
+        client.to(roomId).emit('object:moved', {
+            id,
+            x,
+            y,
+        });
+
+        return { status: 'ok' };
     }
 }
