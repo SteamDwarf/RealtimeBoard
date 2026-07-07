@@ -17,7 +17,6 @@ import {
     CreateBoardObjectDTO,
     createBoardObjectSchema,
 } from '../board-objects/dto/create-board-object.dto';
-import { error } from 'console';
 import { WsExceptionFilter } from 'src/common/filters/ws-exception.filter';
 import {
     GetBoardObjectsDTO,
@@ -28,6 +27,7 @@ import {
     MoveBoardObjectDTO,
     moveBoardObjectSchema,
 } from '../board-objects/dto/move-board-object.dto';
+import { BoardSyncService } from '../board-objects/board-sync.service';
 
 @UseFilters(new WsExceptionFilter())
 @WebSocketGateway({
@@ -45,16 +45,37 @@ export class BoardGatewayGateway
 
     constructor(
         private readonly boardObjectsService: BoardObjectsService,
+        private readonly boardSyncService: BoardSyncService,
         @Inject('REDIS_DATA_CLIENT')
         private readonly redisClient: RedisClientType,
     ) {}
 
     handleConnection(client: Socket) {
         this.logger.log(`🔌 Клиент подключился: ${client.id}`);
+
+        client.on('disconnecting', async () => {
+            await this.handleClientLeave(client);
+        });
     }
 
     handleDisconnect(client: Socket) {
         this.logger.log(`❌ Клиент отключился: ${client.id}`);
+    }
+
+    async handleClientLeave(client: Socket) {
+        const rooms = Array.from(client.rooms).filter((r) => r !== client.id);
+
+        for (const roomId of rooms) {
+            const socketIdsInRoom = await this.server.in(roomId).fetchSockets();
+
+            if (socketIdsInRoom && socketIdsInRoom.length === 1) {
+                this.logger.log(
+                    `🧹 Комната ${roomId} опустела. Очищаем RAM...`,
+                );
+
+                await this.boardSyncService.syncSingleRoomAndClear(roomId);
+            }
+        }
     }
 
     @SubscribeMessage('room:join')

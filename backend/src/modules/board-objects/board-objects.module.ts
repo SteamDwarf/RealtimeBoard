@@ -6,6 +6,6 @@ import { BoardSyncService } from './board-sync.service';
 @Module({
     imports: [PrismaModule],
     providers: [BoardObjectsService, BoardSyncService],
-    exports: [BoardObjectsService],
+    exports: [BoardObjectsService, BoardSyncService],
 })
 export class BoardObjectsModule {}

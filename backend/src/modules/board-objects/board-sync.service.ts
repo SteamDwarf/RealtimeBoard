@@ -29,32 +29,50 @@ export class BoardSyncService {
             `⏳ Начало синхронизации координат для ${dirtyRoomIds.length} комнат...`,
         );
 
-        const updates: Prisma.PrismaPromise<any>[] = [];
+        await this.processRoomsAndSync(dirtyRoomIds);
+    }
 
-        for (const roomId of dirtyRoomIds) {
-            const key = `room:objects:${roomId}`;
-            const cachedObjects = await this.redisClient.hGetAll(key);
+    async syncSingleRoomAndClear(roomId: string) {
+        const redisKey = `room:objects:${roomId}`;
+        const cachedObjects = await this.redisClient.hGetAll(redisKey);
 
-            if (!cachedObjects) continue;
+        if (cachedObjects && Object.keys(cachedObjects).length > 0) {
+            this.logger.log(
+                `💾  Финальный флеш данных пустой комнаты ${roomId} в Postgres...`,
+            );
 
-            for (const [objectId, coordsJson] of Object.entries(
-                cachedObjects,
-            )) {
+            const updates: Prisma.PrismaPromise<any>[] = [];
+            this.buildUpdatesList(cachedObjects, updates);
+
+            if (updates.length > 0) {
                 try {
-                    const { x, y } = JSON.parse(coordsJson);
-
-                    updates.push(
-                        this.prisma.boardObject.update({
-                            where: { id: objectId },
-                            data: { x, y },
-                        }),
-                    );
+                    await this.prisma.$transaction(updates);
                 } catch (error) {
-                    this.logger.log(
-                        `Ошибка парсинга координат для объекта ${objectId}`,
+                    this.logger.error(
+                        `❌ Ошибка фиксации данных для комнаты ${roomId}`,
+                        error,
                     );
                 }
             }
+        }
+
+        await Promise.all([
+            this.redisClient.del(redisKey),
+            this.redisClient.sRem('board:dirty_rooms', roomId),
+        ]);
+
+        this.logger.log(`🗑️  RAM очищен для комнаты ${roomId}`);
+    }
+
+    private async processRoomsAndSync(roomIds: string[]) {
+        const updates: Prisma.PrismaPromise<any>[] = [];
+
+        for (const roomId of roomIds) {
+            const key = `room:objects:${roomId}`;
+            const cachedObjects = await this.redisClient.hGetAll(key);
+            if (!cachedObjects) continue;
+
+            this.buildUpdatesList(cachedObjects, updates);
         }
 
         if (updates.length > 0) {
@@ -67,6 +85,28 @@ export class BoardSyncService {
                 this.logger.error(
                     '❌ Ошибка при массовом сохранении координат в Postgres',
                     error,
+                );
+            }
+        }
+    }
+
+    private buildUpdatesList(
+        cachedObjects: Record<string, string>,
+        updates: Prisma.PrismaPromise<any>[],
+    ) {
+        for (const [objectId, coordsJson] of Object.entries(cachedObjects)) {
+            try {
+                const { x, y } = JSON.parse(coordsJson);
+
+                updates.push(
+                    this.prisma.boardObject.update({
+                        where: { id: objectId },
+                        data: { x, y },
+                    }),
+                );
+            } catch (error) {
+                this.logger.log(
+                    `Ошибка парсинга координат для объекта ${objectId}`,
                 );
             }
         }
