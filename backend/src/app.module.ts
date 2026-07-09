@@ -8,6 +8,7 @@ import { BoardGatewayGateway } from './modules/board-gateway/board-gateway.gatew
 import { BoardObjectsModule } from './modules/board-objects/board-objects.module';
 import { RedisModule } from './modules/redis/redis.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
     imports: [
@@ -17,6 +18,7 @@ import { ScheduleModule } from '@nestjs/schedule';
         BoardObjectsModule,
         RedisModule,
         ScheduleModule.forRoot(),
+        AuthModule,
     ],
     controllers: [AppController],
     providers: [AppService, BoardGatewayGateway],

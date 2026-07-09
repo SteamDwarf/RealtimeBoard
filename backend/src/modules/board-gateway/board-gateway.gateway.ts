@@ -10,7 +10,13 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { JoinRoomDTO, joinRoomSchema } from './dto/join-room.dto';
-import { Inject, Logger, UseFilters, UsePipes } from '@nestjs/common';
+import {
+    Inject,
+    Logger,
+    UseFilters,
+    UseGuards,
+    UsePipes,
+} from '@nestjs/common';
 import { BoardObjectsService } from '../board-objects/board-objects.service';
 import { ZodWsValidationPipe } from 'src/common/pipes/zod-ws.validation.pipe';
 import {
@@ -28,7 +34,9 @@ import {
     moveBoardObjectSchema,
 } from '../board-objects/dto/move-board-object.dto';
 import { BoardSyncService } from '../board-objects/board-sync.service';
+import { WsJwtGuard } from 'src/common/guards/ws-jwt.guard';
 
+@UseGuards(WsJwtGuard)
 @UseFilters(new WsExceptionFilter())
 @WebSocketGateway({
     cors: {
@@ -83,15 +91,19 @@ export class BoardGatewayGateway
         @ConnectedSocket() client: Socket,
         @MessageBody(new ZodWsValidationPipe(joinRoomSchema)) data: JoinRoomDTO,
     ) {
+        const user = client['user'];
         const { roomId, userName } = data;
 
-        client.join(roomId);
+        this.logger.log(
+            `👤 Юзер ${userName} (ID из JWT: ${user.sub || user.id}) запрашивает доступ в комнату ${roomId}`,
+        );
 
-        this.logger.log(`👤 Юзер ${userName} вошел в комнату ${roomId}`);
+        client.join(roomId);
 
         client.to(roomId).emit('room:user_joined', {
             message: `${userName} присоединился к сессии`,
             userName: userName,
+            userId: user.sub || user.id,
         });
 
         return {
